@@ -9,13 +9,13 @@ use log::{debug, info, warn};
 use tokio::time::Duration;
 
 use crate::config::Config;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::borrow::BorrowMut;
 
 
 pub struct Collect {
     config: Config,
-    files: Vec<Arc<Mutex<FileInfo>>>,
+    files: Vec<Arc<FileInfo>>,
 }
 
 impl Collect {
@@ -41,7 +41,7 @@ impl Collect {
 
         // inode --> FileInfo, convenient to determine whether it already exists
         let mut file_map = HashMap::new();
-        self.files.iter().map(|f| file_map.insert(f.lock().expect("").inode, f));
+        self.files.iter().map(|f| file_map.insert(f.inode, f));
 
         for path in paths {
             if let Ok(m) = metadata(path.clone()) {
@@ -59,12 +59,12 @@ impl Collect {
                         path,
                         inode: m.ino(),
                         last_write_time,
-                        read_pos: f.lock().expect("").read_pos,
-                        read_time: f.lock().expect("").read_time,
+                        read_pos: f.read_pos,
+                        read_time: f.read_time,
                     }
                 };
 
-                files.push(Arc::new(Mutex::new(file_info)));
+                files.push(Arc::new(file_info));
             }
         }
 
@@ -77,9 +77,7 @@ impl Collect {
         for file in &self.files {
             let f = file.clone();
             let task = tokio::spawn(async move {
-                f.lock()
-                    .expect("fileInfo lock failed !")
-                    .read();
+                f.read().await
             });
             tasks.push(task);
         }
