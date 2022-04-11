@@ -162,3 +162,12 @@ impl FileInfo {
         info!("read finished :{:?}", self.path);
     }
 }
+
+pub fn read_line(buf: &BytesMut) -> Option<String> {
+    for (i, b) in buf.iter().enumerate() {
+        if *b == b'\n' {
+            // buf.split()
+        }
+    }
+    None
+}
