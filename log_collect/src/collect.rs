@@ -9,13 +9,15 @@ use log::{debug, info, warn};
 use tokio::time::Duration;
 
 use crate::config::Config;
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::borrow::BorrowMut;
+use tokio::sync::Mutex;
+use std::io::Write;
 
 
 pub struct Collect {
     config: Config,
-    files: Vec<Arc<FileInfo>>,
+    files: Vec<Arc<Mutex<FileInfo>>>,
 }
 
 impl Collect {
@@ -37,11 +39,14 @@ impl Collect {
     }
 
     async fn read_files(&mut self, paths: Vec<PathBuf>) {
-        let mut files = Vec::new();
+        let mut files:Vec<Arc<Mutex<FileInfo>>> = Vec::new();
 
         // inode --> FileInfo, convenient to determine whether it already exists
         let mut file_map = HashMap::new();
-        self.files.iter().map(|f| file_map.insert(f.inode, f));
+        for mf in &self.files {
+            let f = mf.lock().await;
+            file_map.insert(f.inode, mf.clone());
+        }
 
         for path in paths {
             if let Ok(m) = metadata(path.clone()) {
@@ -55,16 +60,19 @@ impl Collect {
                         read_pos: 0,
                         read_time: SystemTime::UNIX_EPOCH,
                     },
-                    Some(f) => FileInfo {
-                        path,
-                        inode: m.ino(),
-                        last_write_time,
-                        read_pos: f.read_pos,
-                        read_time: f.read_time,
+                    Some(f) => {
+                        let f = f.lock().await;
+                        FileInfo {
+                            path,
+                            inode: m.ino(),
+                            last_write_time,
+                            read_pos: f.read_pos,
+                            read_time: f.read_time,
+                        }
                     }
                 };
 
-                files.push(Arc::new(file_info));
+                files.push(Arc::new(Mutex::new(file_info)));
             }
         }
 
@@ -77,7 +85,7 @@ impl Collect {
         for file in &self.files {
             let f = file.clone();
             let task = tokio::spawn(async move {
-                f.read().await
+                read(f).await
             });
             tasks.push(task);
         }
@@ -105,13 +113,20 @@ impl Collect {
 }
 
 #[derive(Debug)]
-struct FileInfo {
+pub struct FileInfo {
     path: PathBuf,
     inode: u64,
 
     last_write_time: SystemTime,
     read_pos: u64,
     read_time: SystemTime,
+}
+
+pub async fn read(f:Arc<Mutex<FileInfo>>){
+    let f = f.lock().await;
+    info!("start read {:?}", f.path);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    info!("read finished :{:?}",f.path);
 }
 
 impl FileInfo {
