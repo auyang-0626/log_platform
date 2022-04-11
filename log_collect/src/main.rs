@@ -13,7 +13,7 @@ use crate::collect::Collect;
 async fn main() {
     init::init();
 
-    let file = std::fs::File::open("/home/yang/CLionProjects/log_platform/log_collect/config.yaml")
+    let file = std::fs::File::open("log_collect/config.yaml")
         .expect("open config failed,please check path!");
 
     let config: Config = serde_yaml::from_reader(file)

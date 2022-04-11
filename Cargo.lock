@@ -131,6 +131,7 @@ dependencies = [
 name = "log_collect"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "env_logger",
  "glob",
  "log",

@@ -5,14 +5,18 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use glob::glob;
-use log::{debug, info, warn};
+use log::{debug, info, warn, error};
 use tokio::time::Duration;
 
 use crate::config::Config;
 use std::sync::{Arc};
 use std::borrow::BorrowMut;
 use tokio::sync::Mutex;
-use std::io::Write;
+use std::io::{Write, Error, SeekFrom};
+use bytes::BytesMut;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use std::rc::Rc;
 
 
 pub struct Collect {
@@ -39,7 +43,7 @@ impl Collect {
     }
 
     async fn read_files(&mut self, paths: Vec<PathBuf>) {
-        let mut files:Vec<Arc<Mutex<FileInfo>>> = Vec::new();
+        let mut files: Vec<Arc<Mutex<FileInfo>>> = Vec::new();
 
         // inode --> FileInfo, convenient to determine whether it already exists
         let mut file_map = HashMap::new();
@@ -53,26 +57,22 @@ impl Collect {
                 let last_write_time = m.modified().unwrap_or(SystemTime::now());
 
                 let file_info = match file_map.get(&m.ino()) {
-                    None => FileInfo {
+                    None => Arc::new(Mutex::new(FileInfo {
                         path,
                         inode: m.ino(),
                         last_write_time,
                         read_pos: 0,
                         read_time: SystemTime::UNIX_EPOCH,
-                    },
+                    })),
                     Some(f) => {
-                        let f = f.lock().await;
-                        FileInfo {
-                            path,
-                            inode: m.ino(),
-                            last_write_time,
-                            read_pos: f.read_pos,
-                            read_time: f.read_time,
-                        }
+                        let mut mf = f.lock().await;
+                        // update path, avoid rename
+                        mf.path = path;
+                        f.clone()
                     }
                 };
 
-                files.push(Arc::new(Mutex::new(file_info)));
+                files.push(file_info);
             }
         }
 
@@ -85,7 +85,7 @@ impl Collect {
         for file in &self.files {
             let f = file.clone();
             let task = tokio::spawn(async move {
-                read(f).await
+                f.lock().await.read().await;
             });
             tasks.push(task);
         }
@@ -120,20 +120,45 @@ pub struct FileInfo {
     last_write_time: SystemTime,
     read_pos: u64,
     read_time: SystemTime,
+
+    // buf: Option<BytesMut>,
 }
 
-pub async fn read(f:Arc<Mutex<FileInfo>>){
-    let f = f.lock().await;
-    info!("start read {:?}", f.path);
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    info!("read finished :{:?}",f.path);
-}
+// 允许的最大的消息
+const MAX_CAPACITY: usize = 1024;
 
 impl FileInfo {
     async fn read(&mut self) {
-        info!("start read {:?}", self.path);
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        info!("read finished :{:?}",self.path);
+        if self.last_write_time.lt(&self.read_time) {
+            info!("ignore [{:?}] because last_write_time({:?}) < read_time({:?})", self.path, self.last_write_time, self.read_time);
 
+            // if self.buf.is_some() {
+            //     if let Ok(s) = self.last_write_time.elapsed() {
+            //         // file idle ge 60, free buf
+            //         if s.as_secs() > 60 {
+            //             self.buf = None;
+            //         }
+            //     }
+            // }
+            return;
+        }
+        info!("start read {:?}", self.path);
+
+        match File::open(self.path.clone()).await {
+            Ok(mut f) => {
+                if self.read_pos > 0 {
+                    f.seek(SeekFrom::Start(self.read_pos)).await;
+                }
+                let mut buf = BytesMut::with_capacity(MAX_CAPACITY);
+
+                if let Ok(n) = f.read_buf(&mut buf).await {
+                    info!("read size :{},capacity:{}", n, buf.capacity());
+                }
+            }
+            Err(e) => { error!("open file failed,{:?}", e) }
+        }
+
+
+        info!("read finished :{:?}", self.path);
     }
 }

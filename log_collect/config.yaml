@@ -1,1 +1,1 @@
-path: '/var/log/*log*'
+path: '/var/log/wifi.log'
