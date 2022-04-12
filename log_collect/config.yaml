@@ -1,1 +1,4 @@
 path: '/var/log/wifi.log'
+eventTime:
+  startPos: 1
+  len: 10

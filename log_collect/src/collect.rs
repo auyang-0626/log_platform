@@ -151,9 +151,17 @@ impl FileInfo {
                 }
                 let mut buf = BytesMut::with_capacity(MAX_CAPACITY);
 
-                if let Ok(n) = f.read_buf(&mut buf).await {
-                    info!("read size :{},capacity:{}", n, buf.capacity());
+                loop {
+                    if let Ok(n) = f.read_buf(&mut buf).await {
+                        if n == 0 {
+                            //todo
+                            break;
+                        }
+                        let line = read_line(&mut buf);
+                        info!("read line {:?}",line)
+                    }
                 }
+
             }
             Err(e) => { error!("open file failed,{:?}", e) }
         }
@@ -163,11 +171,20 @@ impl FileInfo {
     }
 }
 
-pub fn read_line(buf: &BytesMut) -> Option<String> {
+const DEFAULT_POS:i64 = -1;
+pub fn read_line(buf: &mut BytesMut) -> Option<BytesMut> {
+    let mut pos = DEFAULT_POS as usize;
     for (i, b) in buf.iter().enumerate() {
         if *b == b'\n' {
-            // buf.split()
+            pos = i;
+            break;
         }
     }
-    None
+    if pos > DEFAULT_POS as usize {
+       Some(buf.split_to(pos))
+    } else if buf.len() >= MAX_CAPACITY {
+        Some(buf.split_to(buf.len()))
+    } else {
+        None
+    }
 }
