@@ -1,6 +1,7 @@
 mod init;
 mod config;
 mod collect;
+mod event;
 
 extern crate serde;
 

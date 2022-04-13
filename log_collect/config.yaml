@@ -1,4 +1,5 @@
 path: '/var/log/wifi.log'
-eventTime:
-  startPos: 1
-  len: 10
+event_time:
+  start_pos: 0
+  len: 15
+  fmt: '%b %d %T'

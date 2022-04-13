@@ -8,26 +8,27 @@ use glob::glob;
 use log::{debug, info, warn, error};
 use tokio::time::Duration;
 
-use crate::config::Config;
+use crate::config::{Config, EventTimeConfig};
 use std::sync::{Arc};
 use std::borrow::BorrowMut;
 use tokio::sync::Mutex;
 use std::io::{Write, Error, SeekFrom};
-use bytes::BytesMut;
+use bytes::{BytesMut, BufMut};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use std::rc::Rc;
+use crate::event::Event;
 
 
 pub struct Collect {
-    config: Config,
+    config: Arc<Config>,
     files: Vec<Arc<Mutex<FileInfo>>>,
 }
 
 impl Collect {
     pub fn new(config: Config) -> Collect {
         Collect {
-            config,
+            config: Arc::new(config),
             files: Vec::new(),
         }
     }
@@ -84,8 +85,9 @@ impl Collect {
         let mut tasks = Vec::new();
         for file in &self.files {
             let f = file.clone();
+            let c = self.config.clone();
             let task = tokio::spawn(async move {
-                f.lock().await.read().await;
+                f.lock().await.read(c).await;
             });
             tasks.push(task);
         }
@@ -128,7 +130,7 @@ pub struct FileInfo {
 const MAX_CAPACITY: usize = 1024;
 
 impl FileInfo {
-    async fn read(&mut self) {
+    async fn read(&mut self, config: Arc<Config>) {
         if self.last_write_time.lt(&self.read_time) {
             info!("ignore [{:?}] because last_write_time({:?}) < read_time({:?})", self.path, self.last_write_time, self.read_time);
 
@@ -150,18 +152,39 @@ impl FileInfo {
                     f.seek(SeekFrom::Start(self.read_pos)).await;
                 }
                 let mut buf = BytesMut::with_capacity(MAX_CAPACITY);
+                let mut pos = self.read_pos;
 
-                loop {
-                    if let Ok(n) = f.read_buf(&mut buf).await {
-                        if n == 0 {
-                            //todo
-                            break;
+                let file_name = self.path.file_name()
+                    .map_or(String::from("none"), |f| f.to_str().map_or(String::from("none"), |s| s.to_string()));
+
+                while let Ok(n) = f.read_buf(&mut buf).await {
+                    if n == 0 {
+                        //todo
+                        break;
+                    }
+
+                    let mut event = None;
+                    while let Some(line) = read_line(&mut buf) {
+
+                        match event {
+                            None => {
+                                event = Some(Event::force_parse(line, file_name.clone(), pos, &config.event_time));
+                            }
+                            Some(e) => {
+                                if let Some(next_event) = Event::parse(line, file_name.clone(), pos, &config.event_time) {
+                                    pos = pos + e.len();
+                                    submit_event(e).await;
+                                    event = None;
+                                    break;
+                                } else {
+                                   // e.buf.put(line);
+                                    event = Some(e)
+                                }
+                            }
                         }
-                        let line = read_line(&mut buf);
-                        info!("read line {:?}",line)
+
                     }
                 }
-
             }
             Err(e) => { error!("open file failed,{:?}", e) }
         }
@@ -171,7 +194,8 @@ impl FileInfo {
     }
 }
 
-const DEFAULT_POS:i64 = -1;
+const DEFAULT_POS: i64 = -1;
+
 pub fn read_line(buf: &mut BytesMut) -> Option<BytesMut> {
     let mut pos = DEFAULT_POS as usize;
     for (i, b) in buf.iter().enumerate() {
@@ -181,10 +205,14 @@ pub fn read_line(buf: &mut BytesMut) -> Option<BytesMut> {
         }
     }
     if pos > DEFAULT_POS as usize {
-       Some(buf.split_to(pos))
+        Some(buf.split_to(pos))
     } else if buf.len() >= MAX_CAPACITY {
         Some(buf.split_to(buf.len()))
     } else {
         None
     }
+}
+
+pub async fn submit_event(event: Event) {
+    info!("submit:{:?}", event)
 }
