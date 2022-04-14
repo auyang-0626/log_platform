@@ -1,5 +1,5 @@
-path: '/var/log/wifi.log'
+path: '/var/log/test.log'
 event_time:
   start_pos: 0
-  len: 15
-  fmt: '%b %d %T'
+  len: 19
+  fmt: '%Y-%m-%d %H:%M:%S'

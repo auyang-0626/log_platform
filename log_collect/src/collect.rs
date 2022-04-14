@@ -127,7 +127,7 @@ pub struct FileInfo {
 }
 
 // 允许的最大的消息
-const MAX_CAPACITY: usize = 1024;
+const MAX_CAPACITY: usize = 102400;
 
 impl FileInfo {
     async fn read(&mut self, config: Arc<Config>) {
@@ -157,15 +157,14 @@ impl FileInfo {
                 let file_name = self.path.file_name()
                     .map_or(String::from("none"), |f| f.to_str().map_or(String::from("none"), |s| s.to_string()));
 
+                let mut event = None;
                 while let Ok(n) = f.read_buf(&mut buf).await {
                     if n == 0 {
                         //todo
                         break;
                     }
 
-                    let mut event = None;
                     while let Some(line) = read_line(&mut buf) {
-
                         match event {
                             None => {
                                 event = Some(Event::force_parse(line, file_name.clone(), pos, &config.event_time));
@@ -174,15 +173,13 @@ impl FileInfo {
                                 if let Some(next_event) = Event::parse(line, file_name.clone(), pos, &config.event_time) {
                                     pos = pos + e.len();
                                     submit_event(e).await;
-                                    event = None;
-                                    break;
+                                    event = Some(next_event);
                                 } else {
-                                   // e.buf.put(line);
+                                    // e.buf.put(line);
                                     event = Some(e)
                                 }
                             }
                         }
-
                     }
                 }
             }
@@ -197,15 +194,15 @@ impl FileInfo {
 const DEFAULT_POS: i64 = -1;
 
 pub fn read_line(buf: &mut BytesMut) -> Option<BytesMut> {
-    let mut pos = DEFAULT_POS as usize;
+    let mut pos = DEFAULT_POS;
     for (i, b) in buf.iter().enumerate() {
         if *b == b'\n' {
-            pos = i;
+            pos = i as i64;
             break;
         }
     }
-    if pos > DEFAULT_POS as usize {
-        Some(buf.split_to(pos))
+    if pos > DEFAULT_POS {
+        Some(buf.split_to((pos + 1) as usize))
     } else if buf.len() >= MAX_CAPACITY {
         Some(buf.split_to(buf.len()))
     } else {
