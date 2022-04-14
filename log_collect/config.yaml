@@ -1,4 +1,4 @@
-path: '/var/log/test.log'
+path: '/Users/yang/Documents/test.log'
 event_time:
   start_pos: 0
   len: 19

@@ -64,6 +64,7 @@ impl Collect {
                         last_write_time,
                         read_pos: 0,
                         read_time: SystemTime::UNIX_EPOCH,
+                        delay_submit: false,
                     })),
                     Some(f) => {
                         let mut mf = f.lock().await;
@@ -123,7 +124,7 @@ pub struct FileInfo {
     read_pos: u64,
     read_time: SystemTime,
 
-    // buf: Option<BytesMut>,
+    delay_submit: bool,
 }
 
 // 允许的最大的消息
@@ -133,15 +134,6 @@ impl FileInfo {
     async fn read(&mut self, config: Arc<Config>) {
         if self.last_write_time.lt(&self.read_time) {
             info!("ignore [{:?}] because last_write_time({:?}) < read_time({:?})", self.path, self.last_write_time, self.read_time);
-
-            // if self.buf.is_some() {
-            //     if let Ok(s) = self.last_write_time.elapsed() {
-            //         // file idle ge 60, free buf
-            //         if s.as_secs() > 60 {
-            //             self.buf = None;
-            //         }
-            //     }
-            // }
             return;
         }
         info!("start read {:?}", self.path);
@@ -160,27 +152,49 @@ impl FileInfo {
                 let mut event = None;
                 while let Ok(n) = f.read_buf(&mut buf).await {
                     if n == 0 {
-                        //todo
                         break;
                     }
 
                     while let Some(line) = read_line(&mut buf) {
                         match event {
                             None => {
-                                event = Some(Event::force_parse(line, file_name.clone(), pos, &config.event_time));
+                                event = Some(Event {
+                                    event_time: crate::event::parse_event_time_or_now(&line, &config.event_time),
+                                    file_name: file_name.clone(),
+                                    offset: 0,
+                                    buf: line,
+                                });
                             }
-                            Some(e) => {
-                                if let Some(next_event) = Event::parse(line, file_name.clone(), pos, &config.event_time) {
+                            Some(mut e) => {
+                                if let Some(timestamp) = crate::event::parse_event_time(&line, &config.event_time) {
                                     pos = pos + e.len();
+                                    self.read_pos = pos;
                                     submit_event(e).await;
-                                    event = Some(next_event);
+                                    event = Some(Event {
+                                        event_time: timestamp,
+                                        file_name: file_name.clone(),
+                                        offset: pos,
+                                        buf: line,
+                                    });
                                 } else {
-                                    // e.buf.put(line);
+                                    e.merge(line);
                                     event = Some(e)
                                 }
                             }
                         }
                     }
+                }
+                if let Some(e) = event {
+                    if self.delay_submit {
+                        pos = pos + e.len();
+                        self.read_pos = pos;
+                        submit_event(e).await;
+                        self.delay_submit = false;
+                    } else {
+                        self.delay_submit = true;
+                    }
+                } else {
+                    self.delay_submit = false;
                 }
             }
             Err(e) => { error!("open file failed,{:?}", e) }
